@@ -1,4 +1,5 @@
 import request from 'request-promise'
+import Promise from 'bluebird'
 import fs from 'fs'
 
 const BASE_SENTRY_URL = 'https://sentry.io/api/0/projects'
@@ -6,6 +7,8 @@ const BASE_SENTRY_URL = 'https://sentry.io/api/0/projects'
 const DEFAULT_INCLUDE = /\.js$|\.map$/
 const DEFAULT_TRANSFORM = filename => `~/${filename}`
 const DEFAULT_DELETE_REGEX = /\.map$/
+
+const DEFAULT_CONCURRENCY = 5
 
 module.exports = class SentryPlugin {
   constructor(options) {
@@ -24,6 +27,10 @@ module.exports = class SentryPlugin {
 
     this.deleteAfterCompile = options.deleteAfterCompile
     this.deleteRegex = options.deleteRegex || DEFAULT_DELETE_REGEX
+
+    this.concurrency = options.concurrency || DEFAULT_CONCURRENCY
+
+    this.errs = []
   }
 
   apply(compiler) {
@@ -116,7 +123,17 @@ module.exports = class SentryPlugin {
   }
 
   uploadFiles(files) {
-    return Promise.all(files.map(this.uploadFile.bind(this)))
+    return Promise.map(
+      files,
+      this.uploadFile.bind(this),
+      { concurrency: this.concurrency }
+    ).then(() => {
+      if (this.errs.length) {
+        throw this.errs
+      }
+
+      return Promise.resolve()
+    })
   }
 
   uploadFile({ path, name }) {
@@ -130,6 +147,9 @@ module.exports = class SentryPlugin {
         file: fs.createReadStream(path),
         name: this.filenameTransform(name),
       },
+    }).catch((err) => {
+      this.errs.push(err)
+      return Promise.resolve()
     })
   }
 
